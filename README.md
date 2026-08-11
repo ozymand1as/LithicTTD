@@ -8,12 +8,40 @@ technology tree.
 
 | Document | Contents |
 |---|---|
-| [01 — OpenTTD feasibility](docs/01-feasibility.md) | Can OpenTTD serve as the base? What you get free, what you must build, what fights you. Licence analysis, subsystem-by-subsystem LOC accounting, comparison against alternative bases. |
+| [01 — OpenTTD feasibility](docs/01-feasibility.md) | Can OpenTTD serve as the base for a Banished-style design? What you get free, what you must build, what fights you. Licence analysis, subsystem-by-subsystem LOC accounting, comparison against alternative bases. |
 | [02 — Engine rework plan](docs/02-engine-rework-plan.md) | 15 phases from fork hygiene to modding, with per-phase scope, file-level touchpoints, exit gates, and a risk register. |
-| [03 — Game logic guidelines](docs/03-game-logic-guidelines.md) | Conventions for writing the simulation: determinism, commands, amortisation, performance budgets, save/load, tech gating, testing, anti-patterns. |
+| [03 — Game logic guidelines](docs/03-game-logic-guidelines.md) | Conventions for writing the simulation: determinism, commands, amortisation, performance budgets, save/load, tech gating, testing, anti-patterns. Applies to both routes below. |
 | [04 — OpenRCT2 feasibility](docs/04-openrct2-feasibility.md) | The same investigation applied to OpenRCT2. Rejected as a base — but four architectural patterns worth importing, now folded into doc 02. |
+| [05 — Aggregate design via NewGRF + GameScript](docs/05-aggregate-design-modding-route.md) | **The cheap route.** If the game drops individual people for aggregate settlement state, it can be built as a total conversion with no C++ fork at all — 7–10 months instead of years, and your content stays proprietary. |
 
-## Summary
+---
+
+## Two viable routes
+
+The docs cover two different games. Pick the design first; the engineering follows.
+
+| | **A — Banished-style** (docs 01–04) | **B — Aggregate/TTD-style** (doc 05) |
+|---|---|---|
+| Simulation unit | Individual villagers with needs, jobs, pathfinding | Settlement aggregates: population, resources, professions |
+| Transport | Villagers haul on foot | Caravans and hunting parties as TTD vehicles |
+| Job assignment | Task scheduler claiming work | Numeric worker counts per building |
+| Implementation | **Fork OpenTTD's C++** — delete ~167k LOC, rewrite ~61k | **NewGRF + GameScript**, unmodified engine |
+| Effort | Multiple years | **7–10 months** |
+| Your licence | Whole game becomes GPL v2 | **Content stays proprietary** (see doc 05 §2) |
+| Upstream fixes | You maintain a fork | Inherited free, forever |
+| Main risk | Agent pathfinding + job system | Story-page UI is the only player input surface |
+| What you lose | — | The texture of watching named people work |
+
+**Route B is dramatically cheaper and most of the design maps onto native engine mechanics** —
+settlement growth from food delivery and technology gating of vehicle types turn out to be
+configuration, not code. Its one binding constraint is that GameScript cannot create custom GUI
+windows, which lands directly on numeric job assignment. Doc 05 recommends spiking that UI in
+week one, and going *hybrid* (unmodified engine + a ~2–4k-LOC additive patch for a real
+settlement window) rather than forking if it proves too clunky.
+
+---
+
+## Summary — Route A (Banished-style)
 
 **Recommended base: an OpenTTD fork, with two conditions.**
 
