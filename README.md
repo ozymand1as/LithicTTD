@@ -12,7 +12,8 @@ technology tree.
 | [02 — Engine rework plan](docs/02-engine-rework-plan.md) | 15 phases from fork hygiene to modding, with per-phase scope, file-level touchpoints, exit gates, and a risk register. |
 | [03 — Game logic guidelines](docs/03-game-logic-guidelines.md) | Conventions for writing the simulation: determinism, commands, amortisation, performance budgets, save/load, tech gating, testing, anti-patterns. Applies to both routes below. |
 | [04 — OpenRCT2 feasibility](docs/04-openrct2-feasibility.md) | The same investigation applied to OpenRCT2. Rejected as a base — but four architectural patterns worth importing, now folded into doc 02. |
-| [05 — Aggregate design via NewGRF + GameScript](docs/05-aggregate-design-modding-route.md) | **The cheap route.** If the game drops individual people for aggregate settlement state, it can be built as a total conversion with no C++ fork at all — 7–10 months instead of years, and your content stays proprietary. |
+| [05 — Aggregate design via NewGRF + GameScript](docs/05-aggregate-design-modding-route.md) | **The cheap route.** If the game drops individual people for aggregate settlement state, it can be built as a total conversion with no C++ fork at all — 7–10 months instead of years, and your content stays proprietary. Includes the mod-first sequencing strategy. |
+| [06 — Modding resources](docs/06-modding-resources.md) | Curated, link-checked guides, references, reference codebases and tooling for NML and GameScript, plus a two-week ramp-up plan. |
 
 ---
 
