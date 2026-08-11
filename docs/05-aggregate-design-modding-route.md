@@ -30,6 +30,7 @@ limitation is what drives the recommendation in [§8](#8-recommendation-mod-firs
 - [6. Workable contortions](#6-workable-contortions)
 - [7. Build plan](#7-build-plan)
 - [8. Recommendation](#8-recommendation-mod-first-then-a-thin-patch)
+- [9. Sequencing: mod first, patch later](#9-sequencing-mod-first-patch-later)
 
 ---
 
@@ -348,6 +349,11 @@ lands on your core loop. Two outcomes:
   GameScript remain separate works, so only the engine patches become public — a far smaller
   concession than the full fork, but not zero.
 
+**Ship as a pure mod first and defer the patch decision until after playtesting.** That is both
+cheaper and better-informed, and the API is stable enough to make deferral safe rather than a
+gamble — see [§9](#9-sequencing-mod-first-patch-later) for why, the three seams that keep the
+later transition to a one-file swap, and the recommended playtest schedule.
+
 **On the earlier assessments.** Docs 01–04 remain accurate for the Banished-style design they
 assessed; this pivot is a different game, and a much cheaper one. The two documents worth
 re-reading against it are
@@ -364,7 +370,147 @@ where the other was a multi-year bet. Just don't expect the pivot to be free of 
 
 ---
 
-*Assessed against OpenTTD `be4f099` (2026-08-10). All API claims verified against
-`src/script/api/*.hpp`, NewGRF capabilities against `src/newgrf/newgrf_act5.cpp` and
-`newgrf_acta.cpp`, and limits against `src/table/settings/script_settings.ini`,
-`src/cargo_type.h`, and `src/industry_type.h`.*
+## 9. Sequencing: mod first, patch later
+
+**Yes — and mod-first is strictly the better order, not merely the cheaper one.** Three reasons
+beyond cost, then the three seams that decide whether the later transition is a one-file swap or
+a rewrite.
+
+### 9.1 Why this order is right
+
+**1. The API will not rot underneath you.** OpenTTD ships **14 GameScript compatibility layers**
+(`bin/game/compat_1.2.nut` … `compat_15.nut`) — a script declaring `GetAPIVersion() = "1.2"`
+in its `info.nut` still runs on today's build, thirteen years on. `game_changelog.hpp` shows
+releases adding a handful of functions with occasional renames, every one of them shimmed. The
+project's own words, from `compat_15.nut`:
+
+> These window/widget related enumerations have never been stable, but **breaking anything using
+> them is a really big ask** when restructuring code.
+
+NewGRF compatibility is stronger still — OpenTTD runs GRFs written for TTD in the 1990s. Both of
+your deliverables sit on genuinely stable ground. A mod written now will still load in five
+years, which is what makes "defer the patch" safe rather than a gamble.
+
+**2. Playtest distribution is trivial as a mod and expensive as a binary.** Pure mod: *"install
+OpenTTD, drop these two folders in your content directory."* Testers on all three platforms,
+same day, no builds. Hybrid: CI for Windows/macOS/Linux, code signing, an installer or launcher,
+an update path, and you own crash triage. **Mod-first gets you playtesters weeks earlier and
+iterating faster** — which is the entire point of playtesting.
+
+**3. Patching before playtesting means guessing what to patch.** The four-patch list in
+[§8](#8-recommendation-mod-first-then-a-thin-patch) is *my* inference from reading the API. It's
+a reasonable guess, not data. Real playtests will reorder it, and may well reveal that the
+worker-stepper friction matters less than something I haven't predicted (alert legibility, say,
+or the absence of a production graph). Build the patch list from evidence.
+
+### 9.2 The three seams that make the transition cheap
+
+The transition is incremental **only if you build for it from day one.** All three of these cost
+about a day now and save weeks later.
+
+#### Seam 1 — a UI facade (the critical one)
+
+If GameScript calls `GSStoryPage.NewElement()` scattered across a dozen files, swapping to a
+native window means touching all of them. Put every story-page call behind one module:
+
+```squirrel
+// ui/panel.nut — the ONLY file that knows story pages exist
+class Panel {
+    function AddSection(title);
+    function AddStepper(key, label, value, min, max);   // renders as [-] n [+]
+    function AddReadout(key, label, value, trend);
+    function Commit();                                   // flush to the backend
+    function OnInput(key, delta);                        // routed from button events
+}
+```
+
+Everything else calls `panel.AddStepper("foragers", "Foragers", n, 0, idle)`. When the engine
+patch lands, you rewrite `ui/` against the new window API and **nothing else changes**. The
+facade also lets you A/B a second story-page layout during playtesting for free.
+
+#### Seam 2 — GameScript state stays authoritative
+
+Never infer simulation state by reading it back out of the engine. Don't ask an industry what its
+production level is to learn how many foragers you assigned; hold that number in GS state, save
+it in `Save()`, and treat `SetProductionLevel()` as pure **output**.
+
+This is [guidelines §5](03-game-logic-guidelines.md#5-simulation-and-presentation-are-separate)
+applied one layer up: under this architecture, *the engine is your presentation layer.* Keep the
+model on your side of the line and any patch that changes how state is expressed can't corrupt
+it. It also means your saves survive the crossover, because save state lives in GS, not in
+engine internals.
+
+#### Seam 3 — freeze content semantics early, presentation late
+
+The ordering rule that makes deferral safe:
+
+> Patches that add **API or UI** are cheap later. Patches that change **content semantics** are
+> expensive later, because all your content is built on them.
+
+| Decide **before** Phase 2 content work | Safe to defer indefinitely |
+|---|---|
+| The cargo list and per-cargo properties (weights, payment curves, town effects) | The settlement window |
+| Whether money is repurposed or zeroed | Hiding the money UI |
+| Which vehicle classes you use (road only? ships for canoes?) | The opcode ceiling |
+| The industry ↔ profession mapping | Any new script API |
+| Tile/terrain semantics you rely on | Graph and table widgets |
+
+Everything in the left column is a change that invalidates finished content. Everything in the
+right column is additive.
+
+### 9.3 The one risk mod-first does not remove
+
+If playtesting reveals the **aggregate model itself** is wrong — that the game genuinely needs
+individual visible people, or per-tile soil fertility — that is not a patch. That's the fork in
+[doc 02](02-engine-rework-plan.md), and no amount of seam discipline converts one into the other.
+
+Mod-first doesn't protect you from that; it means you **discover it after a few months instead
+of a few years**, which is still overwhelmingly the right trade. But it does mean the Phase 1–3
+prototype must stress-test the *design*, not only the UI. Put a real question to your testers:
+*does supplying an abstract settlement feel like a game you want to keep playing?* That's the
+one that can't be patched.
+
+### 9.4 The crossover is an operations cost, not a coding cost
+
+Going hybrid changes what you ship, and most of the expense is not the C++:
+
+- **Licensing** — the moment you ship a modified binary, that binary is GPL v2 and its source
+  must be published. Only the engine patches, not your content, but it's a discrete step.
+- **Build and release** — CI across three platforms, code signing (Windows and macOS both), an
+  installer or launcher, an update mechanism.
+- **Support** — you own crashes now, including ones in code you didn't write.
+- **Version pinning** — fork at a specific upstream tag, then rebase on a deliberate schedule.
+  Until then, pin the OpenTTD version your mod targets and smoke-test against nightlies.
+
+**Budget 2–4 weeks of pure operations for the crossover**, separate from writing the patches, and
+schedule it as its own phase. A useful side effect of the seam discipline: the pure-mod build
+stays viable after the crossover, so it remains available as a free or demo artifact for players
+who already own OpenTTD.
+
+### 9.5 Recommended sequencing
+
+```
+Phase 0–1  toolchain + UI spike                              (2–3 wk)
+Phase 2–3  cargo/content skeleton + settlement core          (5–7 wk)
+   ▶ PLAYTEST 1 — pure mod, placeholder art, ~10 testers
+     Questions: is supplying a settlement fun? is the stepper UI tolerable?
+Phase 4–5  professions + technology                          (5–7 wk)
+   ▶ PLAYTEST 2 — the full loop, still pure mod
+     Now build the patch list from evidence, and decide: pure-mod or hybrid?
+Phase 6    graphics overhaul  ──────────────────┐            (8–12 wk, art-bound)
+           crossover + patches (if needed) ─────┤ in parallel  (+2–4 wk ops)
+Phase 7–9  world, depletion, balance ───────────┘            (8–12 wk)
+```
+
+**Playtest before art.** Placeholder-art builds answer the only question that matters early — is
+the loop fun — and Phase 6 is both the most expensive phase and the one whose scope depends on
+what survives playtesting. Committing art before Playtest 2 risks paying for buildings and
+vehicles that a design change deletes.
+
+---
+
+*Assessed against OpenTTD `be4f099` (2026-08-10). API claims verified against
+`src/script/api/*.hpp`; NewGRF capabilities against `src/newgrf/newgrf_act5.cpp` and
+`newgrf_acta.cpp`; limits against `src/table/settings/script_settings.ini`, `src/cargo_type.h`
+and `src/industry_type.h`; API stability against `bin/game/compat_*.nut` (14 layers) and
+`src/script/api/game_changelog.hpp`.*

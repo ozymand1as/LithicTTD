@@ -39,6 +39,14 @@ windows, which lands directly on numeric job assignment. Doc 05 recommends spiki
 week one, and going *hybrid* (unmodified engine + a ~2–4k-LOC additive patch for a real
 settlement window) rather than forking if it proves too clunky.
 
+**Ship as a pure mod first; defer the engine patch until after playtesting.** OpenTTD maintains
+14 GameScript compatibility layers going back to 2012, so a mod written today will still load
+years from now — deferral is safe, not a gamble. Mod-first also makes playtest distribution
+trivial ("install OpenTTD, drop in two folders") and builds the patch list from evidence instead
+of guesswork. The transition stays cheap if you build three seams from day one — a UI facade,
+GameScript-authoritative state, and content semantics frozen before art.
+See [doc 05 §9](docs/05-aggregate-design-modding-route.md#9-sequencing-mod-first-patch-later).
+
 ---
 
 ## Summary — Route A (Banished-style)
