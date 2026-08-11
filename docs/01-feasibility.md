@@ -448,25 +448,32 @@ Concrete mapping from your design pillars to what exists:
 ## 7. Alternatives, honestly compared
 
 You asked whether OpenTTD is viable. It is — but you should know what you're choosing
-against, because two of these are arguably closer to your design.
+against.
 
 | Base | Licence | Isometric TTD look | Free-roaming agent sim | Verdict for this project |
 |---|---|---|---|---|
-| **OpenTTD** | GPL v2 | **Exactly** — it *is* the look | None (track-based only) | Best renderer match; you write all the agent/village sim. **The recommended pick if the look is the priority.** |
-| **OpenRCT2** | GPL v3 | Very close (same TTD lineage) | **Yes** — "peeps" are individual agents with needs, thoughts, and pathfinding | Genuinely worth an afternoon's evaluation. You'd inherit agent sim *and* the look, at the cost of a park-shaped tile model and GPLv3. |
-| **Widelands** | GPL v2+ | Different (Settlers-style, softer) | **Yes** — workers, wares, carriers, production chains, ware economy | Closest *gameplay* match by far — its economy is almost your economy. But the visual style is not TTD's, and that's your stated pillar. |
+| **OpenTTD** | GPL v2 | **Exactly** — it *is* the look | None (track-based YAPF only) | Best renderer match, ships-with-free-art, 8bpp *and* 32bpp RGBA. You write all the agent/village sim. **Recommended.** |
+| **OpenRCT2** | GPL v3 | Very close (same TTD lineage) | **No** — see below | **Evaluated in full: [04-openrct2-feasibility.md](04-openrct2-feasibility.md). Rejected.** Requires purchased RCT2 assets to run, and is hard-locked to 256 colours. Its "peeps" walk on footpath tiles only, via a deliberately-not-A\* one-step search. |
+| **Widelands** | GPL v2+ | Different (Settlers-style, softer) | **Yes** — workers, wares, carriers, production chains, ware economy | Closest *gameplay* match by far — its economy is almost your economy. But the visual style is not TTD's, and that's your stated pillar. Worth a day if you'd trade the look for the sim. |
 | **Unknown Horizons / FIFE** | GPL v2 / LGPL | Isometric, but Anno-style | Partial | Smaller, less active; Python performance ceiling for thousands of agents. |
 | **Godot 4** | MIT | Build it yourself | Build it yourself | Permissive licence, modern tooling, great iteration. But you write the isometric sorted renderer *and* the sim. Realistically the largest total effort for a TTD look. |
 | **From scratch (SDL/raylib)** | Yours | Build it yourself | Build it yourself | Maximum control, maximum cost. Only sane if the renderer is your core competency. |
 
-**The trade in one sentence:** OpenTTD gives you the exact visual identity and the hardest
-rendering problem solved, and gives you nothing toward the agent simulation. OpenRCT2 and
-Widelands each give you meaningful chunks of the simulation but compromise the look.
+**On OpenRCT2 — correcting an earlier version of this document.** This section previously
+claimed OpenRCT2's peeps are *"individual agents with needs, thoughts, and pathfinding"* and
+that forking it would let you inherit agent simulation along with the look, and recommended a
+day's evaluation. The evaluation was done and **that claim was wrong.** Guests walk only on
+placed footpath tiles; the pathfinder is an explicitly-not-A\* depth-first search returning one
+direction per step; and the `Guest` struct's ~40 fields yield exactly three (`hunger`,
+`Energy`, `happiness`) that transfer to a villager. On top of that it requires purchased
+RollerCoaster Tycoon 2 files to run and cannot render more than 256 colours. Full analysis and
+the four architectural patterns worth importing from it are in
+[04-openrct2-feasibility.md](04-openrct2-feasibility.md).
 
-If the OpenTTD *aesthetic* is a non-negotiable pillar of the pitch — and your framing
-suggests it is — forking OpenTTD is the right call. **Before committing, spend one day
-building OpenRCT2 and reading its `Peep`/`Guest` pathfinding.** If its look is close enough
-for you, you save several months.
+**The trade in one sentence:** OpenTTD gives you the exact visual identity and the hardest
+rendering problem solved, and gives you nothing toward the agent simulation. **No candidate
+engine gives you agent pathfinding** — that is work you do regardless of base, so choose on
+renderer, art pipeline, and licence instead.
 
 ---
 
@@ -477,8 +484,9 @@ order:**
 
 1. **Resolve licensing first.** One conversation, before any code. If closed-source or
    console is required, switch bases now.
-2. **Spend one day evaluating OpenRCT2** (§7). Cheap insurance against months of avoidable
-   pathfinding work.
+2. ~~Spend one day evaluating OpenRCT2.~~ **Done** — see
+   [04-openrct2-feasibility.md](04-openrct2-feasibility.md). Rejected as a base; four
+   architectural patterns imported into the rework plan instead.
 3. **Build a vertical-slice spike before the big deletion.** Two to three weeks, on an
    unmodified fork: add one custom `TileTypeProcs` for a "forest" tile, add a lean
    `Villager` pool that free-moves in world coordinates using the disaster-vehicle

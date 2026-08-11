@@ -388,9 +388,11 @@ struct Storage {
   in-production + reserved. Any drift is a bug; catch it at the tick it happens, not in a
   player's 40-hour save.
 
-The same discipline applies to tile claims: a tree being chopped is claimed so two
-woodcutters don't target it. `TileSim::claim` (§[rework plan 3.1](02-engine-rework-plan.md#31-widen-the-tile-struct--deliberately-once))
-holds this.
+The same discipline applies to tile claims: a tree being chopped is claimed so two woodcutters
+don't target it. Whichever tile representation you chose in
+[rework plan §3.1](02-engine-rework-plan.md#31-choose-the-tile-representation), it needs a claim
+field — `TileSim::claim` under the flat struct, or a field on the resource element under
+element lists.
 
 ---
 

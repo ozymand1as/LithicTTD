@@ -6,6 +6,17 @@ Read [the feasibility assessment](01-feasibility.md) first — this plan assumes
 conclusions, notably that the tile-type dispatch table is the main extension seam and that
 the GRF-bound graphics pipeline must be replaced early.
 
+**Amendments from the OpenRCT2 evaluation.** [That assessment](04-openrct2-feasibility.md)
+rejected OpenRCT2 as a base but identified four architectural patterns worth importing. They
+are folded into the phases below and flagged **[from OpenRCT2]** where they appear:
+
+| Import | Phase | Effect on the plan |
+|---|---|---|
+| Variable-length tile-element lists | 3 | **Replaces** the "widen the packed tile struct" approach with something better |
+| `.parkobj`-style JSON+PNG content objects | 2 | Validated format for the loader you're writing anyway |
+| Entity tweening | 4 | ~200 lines; decouples visual smoothness from tick rate |
+| Per-field state-diff replay tooling | 13 | Turns "the hash diverged" into an actionable field name |
+
 ## Guiding principles for the whole rework
 
 1. **Never break the build for more than a day.** The fork must stay runnable at every
@@ -191,6 +202,15 @@ save/load round-trips, no crashes, asserts clean. Commit as `v0.1-amputated`.
 `ReadSprite()` (`spritecache.cpp:454`) is the single place that hardcodes
 `SpriteLoaderGrf`. Add an implementation that reads PNG atlases plus a manifest.
 
+**[from OpenRCT2]** Model the container on OpenRCT2's `.parkobj` format: a zip archive holding
+an `object.json` manifest plus a PNG image table, loaded by an object factory
+(`ObjectFactory.cpp`, `ImageTable.cpp`, `ImageImporter.cpp`). It is a proven design for exactly
+this job, it keeps a building's spec and its art in one shippable unit, and OpenRCT2 goes
+further by making *animation sets* data objects too (`PeepAnimationsObject`) — worth copying
+for villager animation variety. The one thing not to copy: OpenRCT2 quantises imported PNGs
+into a 256-colour palette. On OpenTTD you keep full RGBA, so you get the better pipeline *and*
+the better ceiling.
+
 Manifest sketch (JSON — `3rdparty/nlohmann` is already vendored):
 
 ```json
@@ -254,7 +274,50 @@ editing a manifest, with hot-reload in debug. Commit as `v0.2-png-pipeline`.
 
 ## Phase 3 — Tile model rework
 
-### 3.1 Widen the tile struct — deliberately, once
+**This phase changed as a result of the [OpenRCT2 evaluation](04-openrct2-feasibility.md).**
+The original plan widened OpenTTD's fixed 12-byte, one-type-per-tile struct. OpenRCT2's model
+is better for a building game, and adopting it is the single most valuable import from that
+evaluation. Both options are documented; pick one deliberately, because this is the decision
+you cannot cheaply revisit.
+
+### 3.1 Choose the tile representation
+
+#### Option A (recommended) — variable-length tile-element lists **[from OpenRCT2]**
+
+Replace "one type per tile" with a per-tile **list of typed 16-byte elements**, allocated from
+a global pool and terminated by a last-for-tile flag, indexed by a per-tile pointer array
+(OpenRCT2's `TileElementBase` / `TilePointerIndex` / `kMaxTileElements`):
+
+```cpp
+struct TileElementBase {       // 16 bytes total per element
+	uint8_t  type;             // Surface / Ground / Building / Wall / Prop / Path / Resource
+	uint8_t  flags;            // last-for-tile, ghost, invisible, occupied quadrants
+	uint8_t  base_height;      // bottom of this element
+	uint8_t  clearance_height; // top — what can stack above it
+	uint16_t owner_ref;        // Building/Storage pool index
+	/* + 10 bytes interpreted per element type */
+};
+```
+
+Why this wins for a Lithic village:
+
+- **Vertical stacking.** Ground + building + a wall + a decoration on one tile, each at its own
+  height, with `clearance_height` making "can I build above this?" a local check rather than a
+  special case.
+- **Quarter-tile occupancy** via the flags nibble — small props (a drying rack, a firepit, a
+  boulder) share a tile without consuming it.
+- **No bit-packing arms race.** Each element type owns its own 10 bytes. Adding a field to
+  buildings doesn't compete with forestry for space, which is the structural reason OpenTTD's
+  tile layer is painful to extend.
+- **Sparse cost.** Empty terrain is one surface element; complexity costs memory only where it
+  exists.
+
+Costs, honestly: an extra indirection on every tile access (mitigated by the pointer index),
+a pool allocator with insert/remove/defragment, and a rewrite of every `GetTileType(t)` call
+site rather than a mechanical widening. It also means diverging further from upstream's
+`landscape.cpp` — keep the changes surgical so viewport fixes stay cherry-pickable.
+
+#### Option B (simpler) — widen the flat struct
 
 ```cpp
 // map_func.h — replace TileBase/TileExtended
@@ -276,22 +339,35 @@ struct TileSim {           // new, 8 bytes — pure simulation state
 };
 ```
 
-16 bytes/tile = 4 MB on 512×512, 1 MB on 256×256. Trivial.
+16 bytes/tile = 4 MB on 512×512, 1 MB on 256×256. Trivial memory cost, far less work than
+Option A, and adequate *if* your design never wants two constructed things on one tile. Decide
+that now — retrofitting Option A after Phase 8 means reworking every building in the game.
+
+**Recommendation:** Option A if buildings, walls, and props are a meaningful part of the
+settlement's visual density (which, for a Banished-like, they usually are). Option B if you
+want to reach a playable slice fastest and can accept one structure per tile.
+
+#### Rules that apply to either option
 
 **Non-negotiable process rule:** maintain `docs/tile-layout.md` as the authoritative
-bit-allocation table, updated in the same commit as any layout change. OpenTTD's tile layer
-is hard to modify precisely because this document (`docs/landscape.html`) drifted from an
-exhaustively-packed reality. Don't repeat it. Prefer named fields over bit-packing until
-memory actually forces your hand — at 512×512 it never will.
+field/bit-allocation table, updated in the same commit as any layout change. OpenTTD's tile
+layer is hard to modify precisely because this document (`docs/landscape.html`) drifted from an
+exhaustively-packed reality. Don't repeat it. Prefer named fields over bit-packing until memory
+actually forces your hand — at 512×512 it never will.
 
-**Split hot from cold.** Keep `TileBase` (touched every frame by rendering) and `TileSim`
-(touched by the tile loop) in separate arrays as upstream already does — it's a real
-cache win.
+**Split hot from cold.** Keep render-hot data (touched every frame) separate from
+simulation-only data (touched by the tile loop), as upstream already does with
+`TileBase`/`TileExtended`. Real cache win either way.
+
+**Steal `SurfaceElement`'s ideas** regardless of option: OpenRCT2's surface carries
+`GrassLength` with an `UpdateGrassLength()` growth model, per-tile `WaterHeight`, `Slope`, and a
+swappable `SurfaceStyle` terrain object. All four map directly onto what you need.
 
 ### 3.2 New tile type set
 
-Widen `TILE_TYPE_BITS` from 4 to 5 (32 slots) while you're here — retrofitting later touches
-every `GetTileType` site and the save format.
+Under Option B, widen `TILE_TYPE_BITS` from 4 to 5 (32 slots) while you're here — retrofitting
+later touches every `GetTileType` site and the save format. Under Option A the type lives in
+the element and the ceiling is per-element-type, so this constraint disappears.
 
 | Type | Notes |
 |---|---|
@@ -345,7 +421,8 @@ villagers walking through walls — and it is much easier to enforce now than to
 ### Gate
 
 New tile types render, tile loops run, terraforming and save/load work, `docs/tile-layout.md`
-matches the code. Commit as `v0.3-tile-model`.
+matches the code, and the chosen representation is recorded with its rationale in
+`docs/decisions/`. Commit as `v0.3-tile-model`.
 
 ---
 
@@ -394,6 +471,24 @@ Target **≤ 128 bytes**. At 2,000 villagers that's 256 KB — fits comfortably 
 matters because you iterate all of them every tick. Keep needs/work/movement fields adjacent
 so the hot tick loop touches few cache lines. Put anything rare (full name string, life
 history, log) in a side table keyed by `VillagerID`, not inline.
+
+**Counter-example worth knowing.** OpenRCT2 stores entities as a fixed 512-byte union across
+65,535 statically-allocated slots (`union Entity_t { uint8_t Pad00[0x200]; ... }`) — 33.5 MB
+reserved regardless of population, sized by its largest entity type, and iterated with a
+512-byte stride. Do not do this. OpenTTD's slot-reusing `Pool` with a lean struct is the right
+primitive, and the 128-byte target is what makes iterating thousands of agents cheap.
+
+### 4.1b Interpolated rendering **[from OpenRCT2]**
+
+Port the equivalent of OpenRCT2's `EntityTweener` (`entity/EntityTweener.cpp`, 188 lines):
+cache each actor's pre- and post-tick position, and interpolate between them when drawing.
+This decouples visual smoothness from the simulation tick rate, so 30 Hz sim renders as
+smooth motion at 60+ fps. OpenTTD has no equivalent — its actors snap per tick, which is
+unnoticeable on a train and very noticeable on a walking person.
+
+Small, self-contained, and high perceived-quality return. Note the discipline it requires: the
+interpolated position is **presentation-only state** and must never feed back into the
+simulation ([guidelines §5](03-game-logic-guidelines.md#5-simulation-and-presentation-are-separate)).
 
 ### 4.2 Rendering
 
@@ -833,6 +928,22 @@ Because every mutation is a command, you can:
 This catches determinism regressions, save/load asymmetry, and subtle sim bugs that no unit
 test will find. Run it in CI over several recorded multi-hour sessions.
 
+**Go one step further than a hash — add per-field state diffing [from OpenRCT2].** OpenRCT2
+ships this and it's the piece that makes replay testing *usable*: `ReplayManager.cpp` (890 LOC)
+records and replays, `GameStateSnapshots.cpp` (801 LOC) compares two snapshots **field by
+field** (`CompareSpriteDataPeep`, `CompareSpriteDataCommon`, …) and reports which member of
+which entity diverged, and `EntitiesChecksum` is a SHA-1 over all entity state.
+
+The difference in practice: a bare hash tells you *"state diverged at tick 91,338."* Field
+diffing tells you *"`Villager::hunger` differs on villager 4,102 at tick 91,338: 41 vs 42."*
+The first sends you bisecting for a day; the second names the bug. Given that you're writing the
+harness anyway, write the diff generator alongside it — a `SL_`-style field table per pool gets
+you comparison and serialisation from one declaration.
+
+Also copy OpenRCT2's practice of keeping a **versioned corpus of recorded replays** as a
+separate asset (their `assets.json` pins a `replays` archive by SHA-256) rather than committing
+large binaries into the source tree.
+
 ---
 
 ## Phase 14 — Modding surface (optional)
@@ -853,7 +964,8 @@ replay-safe.
 | Job system deadlocks/thrashes | **Severe** | Design failure modes in from the start (§7.3); headless soak tests |
 | Sprite sorter misbehaves with your art | High | Verify in Phase 0 spike before commissioning art |
 | GRF pipeline poisons art workflow | High | Phase 2 before any art production |
-| Tile layout churn | Medium | Widen once, deliberately, in Phase 3; maintain `docs/tile-layout.md` |
+| Tile representation chosen wrong | **Severe** | Decide Option A vs B in Phase 3 §3.1 *before* Phase 8; retrofitting element lists after buildings exist reworks every building |
+| Tile layout churn | Medium | Change once, deliberately, in Phase 3; maintain `docs/tile-layout.md` |
 | Money/`Owner` excision rabbit hole | Medium | Neutralise, don't excise (§6.1) |
 | NewGRF removal is tangled | Medium | Delete per-feature with the owning subsystem; stub callbacks first |
 | Upstream divergence | Low | Keep `upstream` remote; minimise edits to `viewport.cpp`/`blitter/`/`window.cpp` |
